@@ -84,29 +84,35 @@ const searchFromUnipa = async (req: NextApiRequest, res: NextApiResponse) => {
     return;
   }
   const anno = parseInt(q.anno);
-  const cookie_getter = await fetch(SEARCH_URL);
-  const _cookie_header = cookie_getter.headers.get('set-cookie');
-  if (_cookie_header === null || _cookie_header === undefined) {
-    console.log('Nessun cookie, danno');
-    res.status(500).json({ error: 'Qualcosa è andato storto' });
-    return;
-  }
-  const response = await fetch(
-    SEARCH_URL,
-    generateOptions(_cookie_header, anno)
-  );
+  
+  try {
+    const cookie_getter = await fetch(SEARCH_URL);
+    const _cookie_header = cookie_getter.headers.get('set-cookie');
+    if (_cookie_header === null || _cookie_header === undefined) {
+      console.log('Nessun cookie, danno');
+      res.status(500).json({ error: 'Qualcosa è andato storto' });
+      return;
+    }
+    const response = await fetch(
+      SEARCH_URL,
+      generateOptions(_cookie_header, anno)
+    );
 
-  const body = await response.text();
-  const cheerio = await import('cheerio');
-  const $ = cheerio.load(body);
-  if (!$('#app')) {
+    const body = await response.text();
+    const cheerio = await import('cheerio');
+    const $ = cheerio.load(body);
+    if (!$('#app')) {
+      return res.status(500).json({ error: 'Qualcosa è andato storto' });
+    }
+    // return res.setHeader("Content-Type", "text/html").send(body)
+    return res
+      .status(200)
+      .setHeader('Cache-Control', `max-age=0, s-maxage=${60 * 60 * 24 * 1}`)
+      .json(parseResponse($));
+  } catch (error) {
+    console.error('Error fetching from UniPa:', error);
     return res.status(500).json({ error: 'Qualcosa è andato storto' });
   }
-  // return res.setHeader("Content-Type", "text/html").send(body)
-  return res
-    .status(200)
-    .setHeader('Cache-Control', `max-age=0, s-maxage=${60 * 60 * 24 * 1}`)
-    .json(parseResponse($));
 };
 
 export const API_SEARCH_UNIPA_URL = '/api/unipa/search';
