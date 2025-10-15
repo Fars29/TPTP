@@ -83,7 +83,24 @@ const searchFromUnipa = async (req: NextApiRequest, res: NextApiResponse) => {
     res.status(400).json({ error: "Inserisci l'anno di ricerca" });
     return;
   }
-  const anno = parseInt(q.anno);
+  
+  // Parse year from "xxxx/xxxx" format or single year
+  let anno: number;
+  const yearStr = q.anno.trim();
+  
+  // Check if it's in "xxxx/xxxx" format
+  const yearMatch = yearStr.match(/^(\d{4})\/(\d{4})$/);
+  if (yearMatch) {
+    // Take the first year from the academic year format
+    anno = parseInt(yearMatch[1]);
+  } else if (/^\d{4}$/.test(yearStr)) {
+    // It's a single year
+    anno = parseInt(yearStr);
+  } else {
+    res.status(400).json({ error: "Anno non valido. Usa il formato YYYY o YYYY/YYYY (es. 2023 o 2023/2024)" });
+    return;
+  }
+  
   const cookie_getter = await fetch(SEARCH_URL);
   const _cookie_header = cookie_getter.headers.get('set-cookie');
   if (_cookie_header === null || _cookie_header === undefined) {

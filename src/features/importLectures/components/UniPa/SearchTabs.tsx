@@ -1,38 +1,94 @@
 import { ArrowDownIcon } from '@chakra-ui/icons'
 import {
-    InputGroup, Input, Button, Grid, NumberInput,
-    NumberInputField, GridItem, Box, VStack, useToast
+    InputGroup, Input, Button, Grid, GridItem, Box, VStack, useToast
 } from '@chakra-ui/react'
 import React, { Dispatch, SetStateAction, useState } from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { API_SEARCH_UNIPA_URL, SearchResult } from '../../../../pages/api/unipa/search'
 
-const SearchForm: React.FC<{ updateResults: (name: string, year: number) => void }> = React.memo(({ updateResults }) => {
+// Function to calculate similarity between two strings (Levenshtein distance)
+const levenshteinDistance = (str1: string, str2: string): number => {
+    const matrix: number[][] = [];
+
+    for (let i = 0; i <= str2.length; i++) {
+        matrix[i] = [i];
+    }
+
+    for (let j = 0; j <= str1.length; j++) {
+        matrix[0][j] = j;
+    }
+
+    for (let i = 1; i <= str2.length; i++) {
+        for (let j = 1; j <= str1.length; j++) {
+            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+
+    return matrix[str2.length][str1.length];
+}
+
+const fuzzyMatch = (search: string, target: string): boolean => {
+    const searchLower = search.toLowerCase();
+    const targetLower = target.toLowerCase();
+    
+    // Exact substring match
+    if (targetLower.includes(searchLower)) {
+        return true;
+    }
+    
+    // Fuzzy match using Levenshtein distance
+    const words = searchLower.split(/\s+/);
+    for (const word of words) {
+        if (word.length < 3) continue; // Skip very short words
+        
+        const targetWords = targetLower.split(/\s+/);
+        for (const targetWord of targetWords) {
+            const distance = levenshteinDistance(word, targetWord);
+            const maxDistance = Math.max(1, Math.floor(word.length * 0.3)); // Allow 30% error
+            
+            if (distance <= maxDistance) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+const SearchForm: React.FC<{ updateResults: (name: string, year: string) => void }> = React.memo(({ updateResults }) => {
     const currentYear = (new Date()).getFullYear()
     const [cdsName, setCdsName] = useState("")
-    const [cdsYear, setCdsYear] = useState(currentYear)
+    const [cdsYear, setCdsYear] = useState(`${currentYear - 1}/${currentYear}`)
     return (
         <Grid templateColumns={"1fr 3fr"} gap={2} textAlign="center" alignItems={"center"} pb={5}>
             <label htmlFor="yearCdsField"> <strong> Anno d'Iscrizione </strong> </label>
             <label htmlFor='nameCdsField'> <strong> Corso di Studi </strong></label>
-            <NumberInput
-                step={1}
-                variant="flushed"
-                value={cdsYear}
-                onChange={(e) => setCdsYear(parseInt(e))}
-                min={currentYear - 15}
-                max={currentYear}
-                size="md"
-                allowMouseWheel
-                inputMode='numeric'>
-                <NumberInputField
+            <InputGroup>
+                <Input
                     id="yearCdsField"
                     name="yearCdsField"
-                    pr={0}
                     textAlign="center"
-                    maxLength={4}
-                    minLength={4} />
-            </NumberInput>
+                    type="text"
+                    value={cdsYear}
+                    variant="flushed"
+                    placeholder="2023/2024"
+                    onChange={(e) => setCdsYear(e.target.value)}
+                    onClick={(e) => { (e.target as HTMLInputElement).select() }}
+                    onKeyPress={(e) => {
+                        if (e.key === "Enter") {
+                            updateResults(cdsName, cdsYear)
+                        }
+                    }}
+                />
+            </InputGroup>
             <InputGroup >
                 <Input
                     id="nameCdsField"
@@ -103,18 +159,18 @@ const SearchWrapper: React.FC<{ setUrl: Dispatch<SetStateAction<string>> }> = ({
 
     const [cdsFound, setCdsFound] = useState([] as SearchResult[])
     const [cdsFiltered, setCdsFiltered] = useState([] as SearchResult[])
-    const [lastYearRequested, setLastYear] = useState(0)
+    const [lastYearRequested, setLastYear] = useState("")
     const toast = useToast()
 
-    const updateResults: (name: string, year: number) => void = async (name, year) => {
+    const updateResults: (name: string, year: string) => void = async (name, year) => {
         if (lastYearRequested === year) {
             setCdsFiltered(cdsFound.filter(
-                result => result.name.toLowerCase().includes(name.toLowerCase())
+                result => fuzzyMatch(name, result.name)
             ))
             return
         }
         try {
-            const response = await fetch(`${API_SEARCH_UNIPA_URL}?anno=${year}`)
+            const response = await fetch(`${API_SEARCH_UNIPA_URL}?anno=${encodeURIComponent(year)}`)
             if (response.status !== 200) {
                 throw new Error("Something went horribly wrong");
             }
@@ -122,7 +178,7 @@ const SearchWrapper: React.FC<{ setUrl: Dispatch<SetStateAction<string>> }> = ({
             unstable_batchedUpdates(() => {
                 setCdsFound(results)
                 setCdsFiltered(results.filter(
-                    result => result.name.toLowerCase().includes(name.toLowerCase())
+                    result => fuzzyMatch(name, result.name)
                 ))
                 setLastYear(year)
             })
