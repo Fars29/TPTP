@@ -232,33 +232,37 @@ const fetchUrl = async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).json({ error: 'parametri non validi' });
   }
 
-  const response = await fetch(urlToParse, {
-    headers: {
-      'Accept-Language': 'it',
-    },
-  });
-  const mimeType = response.headers.get('Content-Type') ?? '';
-  if (!mimeType.includes('text/html') && response.status !== 200) {
-    return res.status(400).json({ error: 'risposta ricevuta non idonea' });
+  try {
+    const response = await fetch(urlToParse, {
+      headers: {
+        'Accept-Language': 'it',
+      },
+    });
+    const mimeType = response.headers.get('Content-Type') ?? '';
+    if (!mimeType.includes('text/html') && response.status !== 200) {
+      return res.status(400).json({ error: 'risposta ricevuta non idonea' });
+    }
+    const cheerio = await import("cheerio")
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const draft: LectureDraft[] = [];
+
+    $('tr.odd, tr.even').each(function (this: string) {
+      const lecture = this;
+      draft.push(parseSingleRow($(lecture), $));
+    });
+
+    const apiResponse : IFetchFromUnipaResponse = {
+      url: urlToParse,
+      ...getCdSProperties($),
+      ...convertDraftToFinal(draft),
+    }
+
+    return res.status(200).setHeader("Cache-Control", `max-age=0, s-maxage=${(60 * 60 * 24) * 2}`).json(apiResponse);
+  } catch (error) {
+    console.error('Error fetching from UniPa:', error);
+    return res.status(500).json({ error: 'la richiesta non è andata a buon fine' });
   }
-  const cheerio = await import("cheerio")
-  const html = await response.text();
-  const $ = cheerio.load(html);
-  const draft: LectureDraft[] = [];
-
-  $('tr.odd, tr.even').each(function (this: string) {
-    const lecture = this;
-    draft.push(parseSingleRow($(lecture), $));
-  });
-
-  const apiResponse : IFetchFromUnipaResponse = {
-    url: urlToParse,
-    ...getCdSProperties($),
-    ...convertDraftToFinal(draft),
-  }
-
-  return res.status(200).setHeader("Cache-Control", `max-age=0, s-maxage=${(60 * 60 * 24) * 2}`).json(apiResponse);
-  
 };
 
 export const API_FETCH_UNIPA_URL = "/api/unipa/fetch"
