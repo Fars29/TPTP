@@ -83,17 +83,28 @@ const extractFormData = ($: cheerio.Root): { viewState: string; formData: Record
 
 const parseResponse = ($: cheerio.Root): SearchResult[] => {
   const results = [] as SearchResult[];
-  console.log($('.corso').first().children('* > a').length);
+  const corsoElements = $('.corso');
+  
+  console.log('Found .corso elements:', corsoElements.length);
+  if (corsoElements.length > 0) {
+    console.log('First .corso children count:', corsoElements.first().children('* > a').length);
+  }
 
-  $('.corso').each((_, elem) => {
-    const name = $(elem).children('.denominazione').first().text();
+  corsoElements.each((_, elem) => {
+    const denominazione = $(elem).children('.denominazione').first();
+    const name = denominazione.text().trim();
+    
+    if (!name) {
+      // Skip entries without a name
+      return;
+    }
+    
     const links = [] as { name: string; url: string }[];
     $(elem)
       .find('.sito > a, .sito > * > a')
       .each((_, link) => {
-        let match = ($(link).attr('href') ?? '').match(
-          /oidCurriculum=(\d{4,})/
-        );
+        const href = $(link).attr('href') || '';
+        let match = href.match(/oidCurriculum=(\d{4,})/);
         const url = Array.isArray(match) && match.length > 1 ? match[1] : null;
         if (url === null) return;
         links.push({
@@ -101,11 +112,14 @@ const parseResponse = ($: cheerio.Root): SearchResult[] => {
           url,
         });
       });
+    
     results.push({
       name,
       links,
     });
   });
+  
+  console.log('Parsed results:', results.length);
   return results;
 };
 
@@ -159,14 +173,26 @@ const searchFromUnipa = async (req: NextApiRequest, res: NextApiResponse) => {
 
   const body = await response.text();
   const $ = cheerio.load(body);
-  if (!$('#app')) {
+  
+  // Debug: Log some info about the response
+  console.log('Response status:', response.status);
+  console.log('Response length:', body.length);
+  console.log('Has #app:', $('#app').length > 0);
+  console.log('Has .corso:', $('.corso').length);
+  
+  if (response.status !== 200) {
+    console.error('Non-200 response from UNIPA');
     return res.status(500).json({ error: 'Qualcosa è andato storto' });
   }
+  
+  // Parse the results
+  const results = parseResponse($);
+  
   // return res.setHeader("Content-Type", "text/html").send(body)
   return res
     .status(200)
     .setHeader('Cache-Control', `max-age=0, s-maxage=${60 * 60 * 24 * 1}`)
-    .json(parseResponse($));
+    .json(results);
 };
 
 export const API_SEARCH_UNIPA_URL = '/api/unipa/search';
