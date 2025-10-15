@@ -17,7 +17,7 @@ export interface SearchResult {
 const SEARCH_URL =
   'https://offertaformativa.unipa.it/offweb/public/corso/ricercaSemplice.seam';
 
-const generateOptions = (cookie: string, anno: number) =>
+const generateOptions = (cookie: string, anno: number, viewState: string, formData: Record<string, string>) =>
   ({
     method: 'POST',
     headers: {
@@ -40,28 +40,71 @@ const generateOptions = (cookie: string, anno: number) =>
       Cookie: cookie,
     },
     body: new URLSearchParams({
-      frc: 'frc',
+      ...formData,
       'frc:annoDecorate:anno': anno.toString(),
-      'frc%3AtipoCorsoDecorate%3AidTipoCorso': ``,
-      'frc%3AsuggestCorso': '',
-      'frc%3Aj_id119_selection': '0',
-      'javax.faces.ViewState': 'j_id1',
+      'javax.faces.ViewState': viewState,
     }),
   } as RequestInit);
 
+const extractFormData = ($: cheerio.Root): { viewState: string; formData: Record<string, string> } => {
+  // Extract ViewState from the hidden input field
+  const viewState = $('input[name="javax.faces.ViewState"]').val() as string || 'j_id1';
+  
+  // Extract the form and its fields
+  const formData: Record<string, string> = {};
+  const form = $('form[id="frc"]').first();
+  
+  if (form.length > 0) {
+    // Find all hidden input fields in the form and copy them
+    form.find('input[type="hidden"]').each((_, elem) => {
+      const name = $(elem).attr('name');
+      const value = $(elem).val() as string;
+      if (name && name !== 'javax.faces.ViewState' && name !== 'frc:annoDecorate:anno') {
+        formData[name] = value || '';
+      }
+    });
+  }
+  
+  // Set the form identifier (always needed)
+  formData['frc'] = 'frc';
+  
+  // Add the tipo corso field if not already present
+  if (!Object.keys(formData).some(key => key.includes('tipoCorso') || key.includes('idTipoCorso'))) {
+    formData['frc:tipoCorsoDecorate:idTipoCorso'] = '';
+  }
+  
+  // Add the suggest corso field if not already present
+  if (!Object.keys(formData).some(key => key.includes('suggestCorso'))) {
+    formData['frc:suggestCorso'] = '';
+  }
+  
+  return { viewState, formData };
+};
+
 const parseResponse = ($: cheerio.Root): SearchResult[] => {
   const results = [] as SearchResult[];
-  console.log($('.corso').first().children('* > a').length);
+  const corsoElements = $('.corso');
+  
+  console.log('Found .corso elements:', corsoElements.length);
+  if (corsoElements.length > 0) {
+    console.log('First .corso children count:', corsoElements.first().children('* > a').length);
+  }
 
-  $('.corso').each((_, elem) => {
-    const name = $(elem).children('.denominazione').first().text();
+  corsoElements.each((_, elem) => {
+    const denominazione = $(elem).children('.denominazione').first();
+    const name = denominazione.text().trim();
+    
+    if (!name) {
+      // Skip entries without a name
+      return;
+    }
+    
     const links = [] as { name: string; url: string }[];
     $(elem)
       .find('.sito > a, .sito > * > a')
       .each((_, link) => {
-        let match = ($(link).attr('href') ?? '').match(
-          /oidCurriculum=(\d{4,})/
-        );
+        const href = $(link).attr('href') || '';
+        let match = href.match(/oidCurriculum=(\d{4,})/);
         const url = Array.isArray(match) && match.length > 1 ? match[1] : null;
         if (url === null) return;
         links.push({
@@ -69,11 +112,14 @@ const parseResponse = ($: cheerio.Root): SearchResult[] => {
           url,
         });
       });
+    
     results.push({
       name,
       links,
     });
   });
+  
+  console.log('Parsed results:', results.length);
   return results;
 };
 
@@ -101,6 +147,7 @@ const searchFromUnipa = async (req: NextApiRequest, res: NextApiResponse) => {
     return;
   }
   
+  // First, fetch the page to get cookies and extract form data
   const cookie_getter = await fetch(SEARCH_URL);
   const _cookie_header = cookie_getter.headers.get('set-cookie');
   if (_cookie_header === null || _cookie_header === undefined) {
@@ -108,22 +155,44 @@ const searchFromUnipa = async (req: NextApiRequest, res: NextApiResponse) => {
     res.status(500).json({ error: 'Qualcosa è andato storto' });
     return;
   }
+  
+  // Parse the initial page to extract ViewState and form structure
+  const initialBody = await cookie_getter.text();
+  const cheerio = await import('cheerio');
+  const $initial = cheerio.load(initialBody);
+  const { viewState, formData } = extractFormData($initial);
+  
+  console.log('ViewState extracted:', viewState);
+  console.log('Form data extracted:', Object.keys(formData));
+  
+  // Now make the actual search request with extracted data
   const response = await fetch(
     SEARCH_URL,
-    generateOptions(_cookie_header, anno)
+    generateOptions(_cookie_header, anno, viewState, formData)
   );
 
   const body = await response.text();
-  const cheerio = await import('cheerio');
   const $ = cheerio.load(body);
-  if (!$('#app')) {
+  
+  // Debug: Log some info about the response
+  console.log('Response status:', response.status);
+  console.log('Response length:', body.length);
+  console.log('Has #app:', $('#app').length > 0);
+  console.log('Has .corso:', $('.corso').length);
+  
+  if (response.status !== 200) {
+    console.error('Non-200 response from UNIPA');
     return res.status(500).json({ error: 'Qualcosa è andato storto' });
   }
+  
+  // Parse the results
+  const results = parseResponse($);
+  
   // return res.setHeader("Content-Type", "text/html").send(body)
   return res
     .status(200)
     .setHeader('Cache-Control', `max-age=0, s-maxage=${60 * 60 * 24 * 1}`)
-    .json(parseResponse($));
+    .json(results);
 };
 
 export const API_SEARCH_UNIPA_URL = '/api/unipa/search';
